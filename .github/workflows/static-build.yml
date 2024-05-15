@@ -1,0 +1,64 @@
+name: Test static build
+
+on:
+  push:
+    branches: [ master ]
+    paths-ignore:
+      - '.github/workflows/*.yml'
+      - '!.github/workflows/static-build.yml'
+
+# https://musl.cc/
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    name: static build
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: prep
+      run: |
+        sudo apt-get install acl libacl1-dev attr libattr1-dev liblz4-dev libzstd-dev libxxhash-dev python3-cmarkgfm openssl pkg-config
+        python3 -mpip install --user commonmark
+        echo "/usr/local/bin" >> $GITHUB_PATH
+
+        MUSL=x86_64-linux-musl
+        HOST=x86_64-linux-musl
+
+        wget https://musl.cc/$MUSL-cross.tgz -O $MUSL-cross.tgz -q
+        mkdir toolchain
+        tar -xf $MUSL-cross.tgz -C toolchain
+        echo -e "PATH=$PATH:$PWD/toolchain/$MUSL-cross/bin/" >> $GITHUB_ENV
+        echo -e "HOST=$HOST" >> $GITHUB_ENV
+        echo -e "CC=$MUSL-gcc" >> $GITHUB_ENV
+
+    - run: echo $HOST && echo $CCPREFIX && echo $CC
+
+    - name: configure
+      # run: ./configure CFLAGS="-static" --host=$HOST --disable-openssl --disable-xxhash --disable-zstd --disable-lz4 
+      run: ./configure CFLAGS="-static -I/usr/include -L/usr/lib/x86_64-linux-gnu -lcrypto -lxxhash -llz4 -lzstd" --host=$HOST --disable-roll-simd
+      # run: ./configure CFLAGS="-static" --host=$HOST --disable-simd --disable-openssl --disable-xxhash --disable-zstd --disable-lz4 --disable-asm --disable-roll-simd
+
+    - name: make
+      run: make -j $(getconf _NPROCESSORS_CONF)
+
+    - name: install
+      run: sudo make install
+
+    - name: info
+      run: ./rsync --version
+
+    - name: check link type
+      run: file ./rsync | grep --color=always -E 'static-pie linked|statically|dynamically|not stripped|stripped'
+
+    - name: strip
+      run: $MUSL-strip ./rsync
+
+    - name: check link type
+      run: file ./rsync | grep --color=always -E 'static-pie linked|statically|dynamically|not stripped|stripped'
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: rsync
+        path: ./rsync
